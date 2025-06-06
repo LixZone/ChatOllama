@@ -2,13 +2,15 @@ from flask import Flask, request, jsonify, render_template_string, Response
 import ollama
 import json
 
-# Crée une application Flask
 app = Flask(__name__)
 
+relevant_keywords = ['solaire', 'photovoltaïque', 'panneaux', 'énergie', 'autoconsommation']
+
+def is_relevant(message):
+    return any(word in message.lower() for word in relevant_keywords)
 
 @app.route('/')
 def index():
-    # Retourne une page HTML stylée façon ChatGPT avec barre de chargement
     return render_template_string("""
         <style>
             body {
@@ -36,6 +38,7 @@ def index():
                 display: flex;
                 gap: 8px;
                 margin-bottom: 16px;
+                flex-wrap: wrap;
             }
             #message {
                 flex: 1;
@@ -48,6 +51,14 @@ def index():
             }
             #message:focus {
                 outline: 2px solid #19c37d;
+            }
+            #temperature {
+                width: 80px;
+                background: #343541;
+                color: #ececf1;
+                border: none;
+                border-radius: 6px;
+                padding: 10px;
             }
             button {
                 background: #19c37d;
@@ -83,7 +94,6 @@ def index():
                 margin-right: auto;
                 text-align: left;
             }
-            /* Barre de chargement */
             #loader {
                 display: none;
                 margin: 0 auto 16px auto;
@@ -103,6 +113,7 @@ def index():
             <h2>Chat avec Ollama</h2>
             <form id="chat-form" autocomplete="off">
                 <input type="text" id="message" placeholder="Votre message" required autofocus>
+                <input type="number" id="temperature" min="0" max="1" step="0.1" value="0.0" title="Température">
                 <button type="submit">Envoyer</button>
             </form>
             <div id="loader"></div>
@@ -128,13 +139,15 @@ function renderHistory() {
 document.getElementById('chat-form').onsubmit = async function(e) {
     e.preventDefault();
     const message = document.getElementById('message').value;
+    const temperature = parseFloat(document.getElementById('temperature').value || "0");
+
     if (!message.trim()) return false;
+
     history.push({role: 'user', content: message});
     renderHistory();
     document.getElementById('message').value = '';
     loader.style.display = 'block';
 
-    // Prépare la bulle pour la réponse du bot (streaming)
     let botMsg = {role: 'bot', content: ''};
     history.push(botMsg);
     renderHistory();
@@ -143,7 +156,7 @@ document.getElementById('chat-form').onsubmit = async function(e) {
     const response = await fetch('/chat', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({message, history})
+        body: JSON.stringify({message, history, temperature})
     });
 
     const reader = response.body.getReader();
@@ -182,27 +195,54 @@ def chat():
     data = request.get_json()
     message = data.get("message")
     history = data.get("history", [])
+    temperature = float(data.get("temperature", 0.1))
+
     if not message:
         return jsonify({"error": "Message vide"}), 400
 
-    # On prépare l'historique pour Ollama
-    ollama_history = []
-    for msg in history:
-        if msg['role'] == 'user':
-            ollama_history.append({'role': 'user', 'content': msg['content']})
-        elif msg['role'] == 'bot':
-            ollama_history.append({'role': 'assistant', 'content': msg['content']})
+    ollama_history = [{
+        "role": "system",
+        "content": (
+            "Tu es un assistant spécialisé en énergie solaire et photovoltaïque. "
+            "Réponds de manière concise et précise. "
+            "Si tu ne connais pas la réponse à une question, ou si elle n’est pas liée au domaine du solaire, "
+            "réponds simplement : « Je ne sais pas. » "
+            "Ne tente jamais d’inventer une réponse. Sois honnête et rigoureux."
+            "Donc si tu ne sais pas, dis simplement : « Je ne sais pas. »"
+            "Tu es un assistant spécialisé en énergie solaire et photovoltaïque. "
+            "Tu réponds uniquement aux questions liées à ce domaine. "
+            "Si une question ne concerne pas ce sujet, ou si tu n’as pas la réponse, tu dis simplement : « Je ne sais pas. » "
+            "Tu ne réponds pas aux autres types de questions, même si elles semblent amusantes ou simples."
+            "Sois concis. Utilise des termes techniques justes. Ne répète pas l’information inutilement."
+            "Tu es un assistant expert en énergie solaire et photovoltaïque. "
+            "Tu ne dois répondre qu’aux questions strictement liées à ce domaine. "
+            "Si une question sort du cadre (comme la politique, la géographie, la cuisine, etc.), "
+            "tu dois répondre uniquement : « Je ne sais pas. » "
+            "Tu ne dois jamais inventer, supposer ou répondre de manière créative en dehors de ton domaine d’expertise."
+        )
+    }]
 
-    # Ajoute le message courant si pas déjà dans l'historique (sécurité)
-    if not ollama_history or ollama_history[-1]['content'] != message:
+    for i, msg in enumerate(history):
+        if msg['role'] == 'user' and is_relevant(msg['content']):
+            ollama_history.append({'role': 'user', 'content': msg['content']})
+            if i + 1 < len(history) and history[i + 1]['role'] == 'bot':
+                ollama_history.append({'role': 'assistant', 'content': history[i + 1]['content']})
+
+    if is_relevant(message):
         ollama_history.append({'role': 'user', 'content': message})
+    else:
+        return Response("data: " + json.dumps({'response': "Je ne sais pas."}) + "\n\n", mimetype='text/event-stream')
+
+    options={"temperature": temperature}
 
     def generate():
         try:
+            print("Modèle utilisé :", 'qwen2.5:7b')
             for chunk in ollama.chat(
-                model='llama3.2:1b',
+                model='qwen2.5:7b',
                 messages=ollama_history,
-                stream=True
+                stream=True,
+                options=options,
             ):
                 content = chunk['message']['content']
                 yield f"data: {json.dumps({'response': content})}\n\n"
