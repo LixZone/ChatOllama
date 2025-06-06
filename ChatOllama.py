@@ -1,13 +1,12 @@
 from flask import Flask, request, jsonify, render_template_string, Response
 import ollama
 import json
+from tools import calcule_rendement, outil_test
+
 
 app = Flask(__name__)
 
-relevant_keywords = ['solaire', 'photovoltaïque', 'panneaux', 'énergie', 'autoconsommation']
 
-def is_relevant(message):
-    return any(word in message.lower() for word in relevant_keywords)
 
 @app.route('/')
 def index():
@@ -203,35 +202,24 @@ def chat():
     ollama_history = [{
         "role": "system",
         "content": (
-            "Tu es un assistant spécialisé en énergie solaire et photovoltaïque. "
-            "Réponds de manière concise et précise. "
-            "Si tu ne connais pas la réponse à une question, ou si elle n’est pas liée au domaine du solaire, "
-            "réponds simplement : « Je ne sais pas. » "
-            "Ne tente jamais d’inventer une réponse. Sois honnête et rigoureux."
-            "Donc si tu ne sais pas, dis simplement : « Je ne sais pas. »"
-            "Tu es un assistant spécialisé en énergie solaire et photovoltaïque. "
-            "Tu réponds uniquement aux questions liées à ce domaine. "
-            "Si une question ne concerne pas ce sujet, ou si tu n’as pas la réponse, tu dis simplement : « Je ne sais pas. » "
-            "Tu ne réponds pas aux autres types de questions, même si elles semblent amusantes ou simples."
-            "Sois concis. Utilise des termes techniques justes. Ne répète pas l’information inutilement."
-            "Tu es un assistant expert en énergie solaire et photovoltaïque. "
-            "Tu ne dois répondre qu’aux questions strictement liées à ce domaine. "
-            "Si une question sort du cadre (comme la politique, la géographie, la cuisine, etc.), "
-            "tu dois répondre uniquement : « Je ne sais pas. » "
-            "Tu ne dois jamais inventer, supposer ou répondre de manière créative en dehors de ton domaine d’expertise."
+            """Tu ne dois jamais inventer, supposer ou répondre de manière créative en dehors de ton domaine d’expertise.
+            Tu as accès à deux outils :"
+             - calcule_rendement(puissance_kw, ensoleillement_h) : calcule un rendement estimé en kWh.
+             - outil_test() : renvoie un message de test.
+            Quand une question contient le mot « rendement », tu dois appeler l’outil calcule_rendement avec des valeurs appropriées.
+            Quand une question contient « outil test », tu dois appeler l’outil outil_test.
+            Si tu utilises un outil, réponds directement avec sa sortie sans improviser.
+            Ne tente jamais d’inventer une réponse quand un outil peut répondre précisément."""
         )
     }]
 
     for i, msg in enumerate(history):
-        if msg['role'] == 'user' and is_relevant(msg['content']):
+        if msg['role'] == 'user': 
             ollama_history.append({'role': 'user', 'content': msg['content']})
             if i + 1 < len(history) and history[i + 1]['role'] == 'bot':
                 ollama_history.append({'role': 'assistant', 'content': history[i + 1]['content']})
 
-    if is_relevant(message):
-        ollama_history.append({'role': 'user', 'content': message})
-    else:
-        return Response("data: " + json.dumps({'response': "Je ne sais pas."}) + "\n\n", mimetype='text/event-stream')
+    
 
     options={"temperature": temperature}
 
@@ -250,6 +238,16 @@ def chat():
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
     return Response(generate(), mimetype='text/event-stream')
+    
+def appeler_tool(message):
+    """Détecte et appelle les outils en fonction du message."""
+    if "rendement" in message.lower():
+        # Appel avec des valeurs fictives (ou récupérées via regex par ex.)
+        return calcule_rendement(3, 4.5)
+    elif "outil test" in message.lower():
+        return outil_test()
+    return None
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
